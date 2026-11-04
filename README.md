@@ -158,4 +158,8 @@ An ODP captures the proposed design and the discussion that shaped it. An ADR re
 
 ## License
 
-Obot is licensed under the [MIT License](LICENSE). Every edition, including Obot Community and Obot Enterprise, runs the same open source code from the same container image, and editions differ only in their license key. See [Editions and licensing](https://docs.obot.ai/enterprise/overview) for user and device limits and what each edition includes.
+This is a fork of [obot-platform/obot](https://github.com/obot-platform/obot), licensed under the [MIT License](LICENSE).
+
+Unlike upstream, this fork doesn't require a license key: every installation has all enterprise features, including enterprise auth and model providers, with no user or device limits, and it never contacts Obot's license server. `OBOT_SERVER_LICENSE_KEY` is only used to authenticate to Obot-hosted services, such as the MCP tester model proxy.
+
+Third-party components keep their own licenses, such as the Apache 2.0 licensed [Agent Substrate](https://github.com/agent-substrate/substrate) code in `pkg/substrate` and `chart/charts/substrate`.

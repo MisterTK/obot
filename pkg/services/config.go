@@ -1209,7 +1209,6 @@ func New(ctx context.Context, config Config) (*Services, error) {
 			rateLimiter,
 			config.Hostname,
 			oauthServerConfig.ScopesSupported,
-			licenseProvider,
 		),
 		GatewayClient:                gatewayClient,
 		ProxyManager:                 proxyManager,
@@ -1247,7 +1246,7 @@ func New(ctx context.Context, config Config) (*Services, error) {
 		MCPOAuthClientNativeExceptions: config.MCPOAuthClientNativeExceptions,
 		ForceDynamicClient:             config.ForceDynamicClient,
 		ProductTelemetryConsent:        telemetryConsent,
-		ProductTelemetryPublisher:      producttelemetry.NewPublisher(ctx, telemetryConsent, gatewayClient, storageClient, licenseProvider, config.MCPRuntimeBackend),
+		ProductTelemetryPublisher:      producttelemetry.NewPublisher(ctx, telemetryConsent, gatewayClient, storageClient, license.Unlicensed{}, config.MCPRuntimeBackend),
 		AccessControlRuleHelper:        acrHelper,
 		ModelAccessPolicyHelper:        mapHelper,
 

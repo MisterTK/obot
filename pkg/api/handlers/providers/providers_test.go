@@ -35,7 +35,7 @@ func TestAuthProviderStatus(t *testing.T) {
 			},
 		},
 		{
-			name: "missing entitlement does not make provider unconfigured",
+			name: "required entitlement is always granted",
 			authProvider: authProvider(
 				[]types.ProviderConfigurationParameter{
 					{
@@ -47,8 +47,7 @@ func TestAuthProviderStatus(t *testing.T) {
 			),
 			cred: map[string]string{"API_KEY": "secret"},
 			want: types.CommonProviderStatus{
-				Configured:          true,
-				MissingEntitlements: []string{"ENTITLEMENT"},
+				Configured: true,
 			},
 		},
 		{
@@ -228,7 +227,7 @@ func TestModelProviderStatus(t *testing.T) {
 			},
 		},
 		{
-			name: "missing entitlement does not make provider unconfigured",
+			name: "required entitlement is always granted",
 			modelProvider: modelProvider(
 				[]types.ProviderConfigurationParameter{
 					{
@@ -242,8 +241,7 @@ func TestModelProviderStatus(t *testing.T) {
 			cred: map[string]string{"API_KEY": "secret"},
 			want: types.ModelProviderStatus{
 				CommonProviderStatus: types.CommonProviderStatus{
-					Configured:          true,
-					MissingEntitlements: []string{"ENTITLEMENT"},
+					Configured: true,
 				},
 				ModelsBackPopulated: new(true),
 			},

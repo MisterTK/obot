@@ -157,10 +157,12 @@ func (v *VersionHandler) getVersionResponse(ctx context.Context) (map[string]any
 		slog.Warn("model provider availability unresolved", "error", availabilityErr)
 	}
 
-	hasValidLicense, err := v.LicenseProvider.HasValidLicense(ctx)
+	// Obot-hosted services authenticate with a real Obot license key, so only offer them when one is configured.
+	licenseKey, err := v.LicenseProvider.LicenseKey(ctx)
 	if err != nil {
 		return nil, err
 	}
+	hasValidLicense := licenseKey != ""
 
 	// Set after OBOT_SERVER_VERSIONS so capability values cannot be overridden.
 	values["hasModelProvider"] = availability.HasModelProvider

@@ -25,7 +25,6 @@ import (
 	"github.com/obot-platform/obot/pkg/auth"
 	gclient "github.com/obot-platform/obot/pkg/gateway/client"
 	"github.com/obot-platform/obot/pkg/i18n"
-	"github.com/obot-platform/obot/pkg/license"
 	"github.com/obot-platform/obot/pkg/llm"
 	"github.com/obot-platform/obot/pkg/principal"
 	"github.com/obot-platform/obot/pkg/proxy"
@@ -53,18 +52,17 @@ var (
 )
 
 type Server struct {
-	storageClient           storage.Client
-	gatewayClient           *gclient.Client
-	localK8sClient          kclient.Client
-	obotNamespace           string
-	authenticator           *authn.Authenticator
-	authorizer              *authz.Authorizer
-	proxyManager            *proxy.Manager
-	auditLogger             audit.Logger
-	rateLimiter             *ratelimiter.RateLimiter
-	baseURL                 string
-	mcpOAuthScope           string
-	providerEntitlementGate *license.ProviderEntitlementGate
+	storageClient  storage.Client
+	gatewayClient  *gclient.Client
+	localK8sClient kclient.Client
+	obotNamespace  string
+	authenticator  *authn.Authenticator
+	authorizer     *authz.Authorizer
+	proxyManager   *proxy.Manager
+	auditLogger    audit.Logger
+	rateLimiter    *ratelimiter.RateLimiter
+	baseURL        string
+	mcpOAuthScope  string
 	// devUI is set when the UI is served by the Vite dev server (dev mode).
 	devUI bool
 
@@ -85,25 +83,24 @@ type responseWriter struct {
 	auditLogger audit.Logger
 }
 
-func NewServer(storageClient storage.Client, gatewayClient *gclient.Client, localK8sClient kclient.Client, obotNamespace string, authn *authn.Authenticator, authz *authz.Authorizer, proxyManager *proxy.Manager, auditLogger audit.Logger, rateLimiter *ratelimiter.RateLimiter, baseURL string, oauthScopesSupported []string, licenseProvider *license.Provider) *Server {
+func NewServer(storageClient storage.Client, gatewayClient *gclient.Client, localK8sClient kclient.Client, obotNamespace string, authn *authn.Authenticator, authz *authz.Authorizer, proxyManager *proxy.Manager, auditLogger audit.Logger, rateLimiter *ratelimiter.RateLimiter, baseURL string, oauthScopesSupported []string) *Server {
 	var scope string
 	if len(oauthScopesSupported) > 0 {
 		scope = fmt.Sprintf(", scope=\"%s\"", strings.Join(oauthScopesSupported, " "))
 	}
 	s := &Server{
-		storageClient:           storageClient,
-		gatewayClient:           gatewayClient,
-		localK8sClient:          localK8sClient,
-		obotNamespace:           obotNamespace,
-		authenticator:           authn,
-		authorizer:              authz,
-		proxyManager:            proxyManager,
-		baseURL:                 baseURL + "/api",
-		mcpOAuthScope:           scope,
-		auditLogger:             auditLogger,
-		rateLimiter:             rateLimiter,
-		mux:                     http.NewServeMux(),
-		providerEntitlementGate: license.NewProviderEntitlementGate(licenseProvider, storageClient),
+		storageClient:  storageClient,
+		gatewayClient:  gatewayClient,
+		localK8sClient: localK8sClient,
+		obotNamespace:  obotNamespace,
+		authenticator:  authn,
+		authorizer:     authz,
+		proxyManager:   proxyManager,
+		baseURL:        baseURL + "/api",
+		mcpOAuthScope:  scope,
+		auditLogger:    auditLogger,
+		rateLimiter:    rateLimiter,
+		mux:            http.NewServeMux(),
 	}
 	s.otelHandler = traced(s.mux)
 	return s
@@ -334,56 +331,53 @@ func (s *Server) Wrap(f api.HandlerFunc) http.HandlerFunc {
 		}
 
 		var shouldLogError bool
-		err = s.providerEntitlementGate.Check(req)
-		if err == nil {
-			if !s.authorizer.Authorize(req, user) {
-				if _, err := req.Cookie(auth.ObotAccessTokenCookie); err == nil && req.URL.Path == "/api/me" {
-					// Tell the browser to delete the obot_access_token cookie.
-					// If the user tried to access this path and was unauthorized, then something is wrong with their token.
-					http.SetCookie(rw, &http.Cookie{
-						Name:   auth.ObotAccessTokenCookie,
-						Value:  "",
-						Path:   "/",
-						MaxAge: -1,
-					})
-				}
-
-				// Challenge denied anonymous registry requests without reading settings again.
-				if !authenticated && authz.IsMCPRegistryRequest(req) {
-					rw.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="MCP Registry", resource_metadata="%s/.well-known/oauth-protected-resource/v0.1/servers"`, strings.TrimSuffix(s.baseURL, "/api")))
-				}
-
-				switch {
-				case isSCIM && authenticated:
-					scim.WriteError(rw, http.StatusForbidden, "this credential cannot access this SCIM endpoint")
-				case isSCIM:
-					scim.WriteUnauthorized(rw)
-				case authenticated:
-					httpError(rw, "forbidden", http.StatusForbidden)
-				default:
-					httpError(rw, "unauthorized", http.StatusUnauthorized)
-				}
-
-				return
+		if !s.authorizer.Authorize(req, user) {
+			if _, err := req.Cookie(auth.ObotAccessTokenCookie); err == nil && req.URL.Path == "/api/me" {
+				// Tell the browser to delete the obot_access_token cookie.
+				// If the user tried to access this path and was unauthorized, then something is wrong with their token.
+				http.SetCookie(rw, &http.Cookie{
+					Name:   auth.ObotAccessTokenCookie,
+					Value:  "",
+					Path:   "/",
+					MaxAge: -1,
+				})
 			}
 
-			if strings.HasPrefix(req.URL.Path, "/api/") || authz.IsMCPRegistryRequest(req) {
-				rw.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0")
-				rw.Header().Set("Pragma", "no-cache")
-				rw.Header().Set("Expires", "0")
+			// Challenge denied anonymous registry requests without reading settings again.
+			if !authenticated && authz.IsMCPRegistryRequest(req) {
+				rw.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="MCP Registry", resource_metadata="%s/.well-known/oauth-protected-resource/v0.1/servers"`, strings.TrimSuffix(s.baseURL, "/api")))
 			}
 
-			err = f(api.Context{
-				ResponseWriter: rw,
-				Request:        req,
-				Storage:        s.storageClient,
-				GatewayClient:  s.gatewayClient,
-				User:           user,
-				APIBaseURL:     s.baseURL,
-				LocalK8sClient: s.localK8sClient,
-				ObotNamespace:  s.obotNamespace,
-			})
+			switch {
+			case isSCIM && authenticated:
+				scim.WriteError(rw, http.StatusForbidden, "this credential cannot access this SCIM endpoint")
+			case isSCIM:
+				scim.WriteUnauthorized(rw)
+			case authenticated:
+				httpError(rw, "forbidden", http.StatusForbidden)
+			default:
+				httpError(rw, "unauthorized", http.StatusUnauthorized)
+			}
+
+			return
 		}
+
+		if strings.HasPrefix(req.URL.Path, "/api/") || authz.IsMCPRegistryRequest(req) {
+			rw.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0")
+			rw.Header().Set("Pragma", "no-cache")
+			rw.Header().Set("Expires", "0")
+		}
+
+		err = f(api.Context{
+			ResponseWriter: rw,
+			Request:        req,
+			Storage:        s.storageClient,
+			GatewayClient:  s.gatewayClient,
+			User:           user,
+			APIBaseURL:     s.baseURL,
+			LocalK8sClient: s.localK8sClient,
+			ObotNamespace:  s.obotNamespace,
+		})
 		writeError := httpError
 		if isSCIM {
 			writeError = func(w http.ResponseWriter, message string, code int) {

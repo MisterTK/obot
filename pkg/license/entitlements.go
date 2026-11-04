@@ -2,45 +2,11 @@ package license
 
 import (
 	"context"
-	"fmt"
-	"math"
-	"net/http"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/obot-platform/obot/apiclient/types"
 	gatewayclient "github.com/obot-platform/obot/pkg/gateway/client"
-	v1 "github.com/obot-platform/obot/pkg/storage/apis/obot.obot.ai/v1"
-	"github.com/obot-platform/obot/pkg/system"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
-)
-
-const (
-	enterpriseLimitEntitlementPrefix    = "OBOT_ENTERPRISE_"
-	userLimitEntitlementUsersSuffix     = "_USERS"
-	deviceLimitEntitlementDevicesSuffix = "_DEVICES"
-)
-
-var (
-	entitlementPathsToGate = []string{
-		"/mcp-connect/{mcp_id}",
-		"/mcp-connect/{mcp_id}/",
-		"GET /oauth/authorize",
-		"GET /oauth/authorize/",
-		"GET /oauth/consent/",
-		"POST /oauth/consent/",
-		"GET /oauth/complete/",
-		"GET /oauth/mcp/callback/",
-		"POST /oauth/",
-		"PUT /oauth/",
-		"GET /api/oauth/vmcp/{mcp_id}",
-		"GET /api/oauth/vmcp/{mcp_id}/",
-		"/api/llm-proxy/",
-		"/api/skills",
-		"/api/skills/",
-		"POST /api/devices/scans",
-	}
 )
 
 // Violation describes a configured provider that requires license entitlements
@@ -54,14 +20,9 @@ type Violation struct {
 	Message              string   `json:"message"`
 }
 
-type ProviderEntitlementGate struct {
-	licenseProvider *Provider
-	client          kclient.Client
-	mux             *http.ServeMux
-}
-
-// fake is a fake handler that does fake things
-type fake struct{}
+// Unlicensed reports no entitlements. Use it to describe the installation to Obot, which issued none of the
+// entitlements Provider grants.
+type Unlicensed struct{}
 
 // GetDistributionFromEntitlements returns the product distribution represented by the entitlements.
 func GetDistributionFromEntitlements(entitlements []string) types.ProductTelemetryDistribution {
@@ -77,236 +38,31 @@ func GetDistributionFromEntitlements(entitlements []string) types.ProductTelemet
 	}
 }
 
-func NewProviderEntitlementGate(licenseProvider *Provider, client kclient.Client) *ProviderEntitlementGate {
-	mux := http.NewServeMux()
-	for _, path := range entitlementPathsToGate {
-		mux.Handle(path, (*fake)(nil))
-	}
-
-	return &ProviderEntitlementGate{
-		licenseProvider: licenseProvider,
-		client:          client,
-		mux:             mux,
-	}
+func (Unlicensed) Entitlements(context.Context) ([]string, error) {
+	return nil, nil
 }
 
-func (g *ProviderEntitlementGate) Check(req *http.Request) error {
-	if g == nil || !g.requiresProviderEntitlements(req) {
-		return nil
-	}
+// MissingEntitlements always returns no missing entitlements.
+func (p *Provider) MissingEntitlements(context.Context, []string) ([]string, error) {
+	return nil, nil
+}
 
-	violations, err := g.licenseProvider.configuredProviderViolations(req.Context(), g.client)
-	if err != nil {
-		return fmt.Errorf("failed to check provider license entitlements: %w", err)
-	}
-	if len(violations) > 0 {
-		return types.NewErrHTTP(http.StatusPaymentRequired, "configured provider is missing required license entitlements")
-	}
+// RequireEntitlements always succeeds.
+func (p *Provider) RequireEntitlements(context.Context, []string) error {
 	return nil
 }
 
-func (g *ProviderEntitlementGate) requiresProviderEntitlements(req *http.Request) bool {
-	_, pattern := g.mux.Handler(req)
-	return pattern != ""
+// UserLimit always returns an unlimited user limit.
+func (p *Provider) UserLimit(context.Context) (gatewayclient.UserLimit, error) {
+	return gatewayclient.UserLimit{Unlimited: true}, nil
 }
 
-// MissingEntitlements returns the required entitlements that are unavailable
-// from the current database/config license key.
-func (p *Provider) MissingEntitlements(ctx context.Context, requiredEntitlements []string) ([]string, error) {
-	if err := p.refresh(ctx, false); err != nil {
-		return nil, err
-	}
-	return p.missingEntitlements(requiredEntitlements), nil
+// DeviceLimit always returns an unlimited device limit.
+func (p *Provider) DeviceLimit(context.Context) (gatewayclient.DeviceLimit, error) {
+	return gatewayclient.DeviceLimit{Unlimited: true}, nil
 }
 
-func (p *Provider) missingEntitlements(requiredEntitlements []string) []string {
-	var missing []string
-	for _, entitlement := range requiredEntitlements {
-		if !p.hasEntitlement(entitlement) {
-			missing = append(missing, entitlement)
-		}
-	}
-	return missing
+// GetLicenseViolations always returns no violations.
+func (p *Provider) GetLicenseViolations(context.Context, kclient.Client) ([]Violation, error) {
+	return nil, nil
 }
-
-// UserLimit returns the maximum number of users allowed by the current license.
-// OBOT_ENTERPRISE grants unlimited users unless one or more
-// OBOT_ENTERPRISE_<number>_USERS entitlements define an additive limit.
-func (p *Provider) UserLimit(ctx context.Context) (gatewayclient.UserLimit, error) {
-	maximum, unlimited, err := p.resourceLimit(ctx, userLimitEntitlementUsersSuffix, gatewayclient.DefaultUserLimit)
-	if err != nil {
-		return gatewayclient.UserLimit{}, err
-	}
-	return gatewayclient.UserLimit{
-		Maximum:   maximum,
-		Unlimited: unlimited,
-	}, nil
-}
-
-// DeviceLimit returns the maximum number of devices allowed by the current license.
-// OBOT_ENTERPRISE grants unlimited devices unless one or more
-// OBOT_ENTERPRISE_<number>_DEVICES entitlements define an additive limit.
-func (p *Provider) DeviceLimit(ctx context.Context) (gatewayclient.DeviceLimit, error) {
-	maximum, unlimited, err := p.resourceLimit(ctx, deviceLimitEntitlementDevicesSuffix, gatewayclient.DefaultDeviceLimit)
-	if err != nil {
-		return gatewayclient.DeviceLimit{}, err
-	}
-	return gatewayclient.DeviceLimit{
-		Maximum:   maximum,
-		Unlimited: unlimited,
-	}, nil
-}
-
-func (p *Provider) resourceLimit(ctx context.Context, entitlementSuffix string, defaultMaximum int64) (int64, bool, error) {
-	if err := p.refresh(ctx, false); err != nil {
-		return 0, false, err
-	}
-
-	p.lock.RLock()
-	defer p.lock.RUnlock()
-
-	var maximum int64
-	var isEnterpriseEdition bool
-	for entitlement := range p.entitlements {
-		code := string(entitlement)
-		if code == EnterpriseEntitlement {
-			isEnterpriseEdition = true
-			continue
-		}
-
-		value, ok := strings.CutPrefix(code, enterpriseLimitEntitlementPrefix)
-		if !ok {
-			continue
-		}
-		value, ok = strings.CutSuffix(value, entitlementSuffix)
-		if !ok {
-			continue
-		}
-		if value == "" || strings.IndexFunc(value, func(r rune) bool {
-			return r < '0' || r > '9'
-		}) >= 0 {
-			continue
-		}
-
-		entitlementMaximum, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || entitlementMaximum <= 0 {
-			continue
-		}
-
-		if entitlementMaximum > math.MaxInt64-maximum {
-			maximum = math.MaxInt64
-		} else {
-			maximum += entitlementMaximum
-		}
-	}
-
-	unlimited := isEnterpriseEdition && maximum == 0
-	if maximum == 0 && !unlimited {
-		maximum = defaultMaximum
-	}
-
-	return maximum, unlimited, nil
-}
-
-// RequireEntitlements returns Payment Required if any required entitlements are unavailable.
-func (p *Provider) RequireEntitlements(ctx context.Context, requiredEntitlements []string) error {
-	missing, err := p.MissingEntitlements(ctx, requiredEntitlements)
-	if err != nil {
-		return fmt.Errorf("failed to refresh license entitlements: %w", err)
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return types.NewErrHTTP(http.StatusPaymentRequired, fmt.Sprintf("missing required license entitlements: %v", missing))
-}
-
-// GetLicenseViolations returns all license violations for the configured auth/model providers and resource limits.
-func (p *Provider) GetLicenseViolations(ctx context.Context, c kclient.Client) ([]Violation, error) {
-	violations, err := p.configuredProviderViolations(ctx, c)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check configured provider license entitlements: %w", err)
-	}
-
-	userLimit, err := p.UserLimit(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check user limit: %w", err)
-	}
-	if !userLimit.Unlimited {
-		userCount, err := p.gatewayClient.UserCount(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check user count: %w", err)
-		}
-
-		if userCount > userLimit.Maximum {
-			violations = append(violations, Violation{
-				Type:    "userLimit",
-				Message: fmt.Sprintf("user count (%d) exceeds maximum limit (%d)", userCount, userLimit.Maximum),
-			})
-		}
-	}
-
-	deviceLimit, err := p.DeviceLimit(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check device limit: %w", err)
-	}
-	if !deviceLimit.Unlimited {
-		deviceCount, err := p.gatewayClient.DeviceCount(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check device count: %w", err)
-		}
-
-		if deviceCount > deviceLimit.Maximum {
-			violations = append(violations, Violation{
-				Type:    "deviceLimit",
-				Message: fmt.Sprintf("device count (%d) exceeds maximum limit (%d)", deviceCount, deviceLimit.Maximum),
-			})
-		}
-	}
-
-	return violations, nil
-}
-
-// configuredProviderViolations returns any globally configured auth providers that are
-// currently missing required license entitlements. Model providers aren't checked: the LLM
-// gateway serves every model and requires no entitlement, and legacy model providers left
-// over until the gateway migrates them serve nothing.
-func (p *Provider) configuredProviderViolations(ctx context.Context, c kclient.Client) ([]Violation, error) {
-	if err := p.refresh(ctx, false); err != nil {
-		return nil, fmt.Errorf("failed to refresh license entitlements: %w", err)
-	}
-
-	authProviderViolations, err := p.configuredAuthProviderViolations(ctx, c)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check auth provider license entitlements: %w", err)
-	}
-	return authProviderViolations, nil
-}
-
-func (p *Provider) configuredAuthProviderViolations(ctx context.Context, c kclient.Client) ([]Violation, error) {
-	var authProviders v1.AuthProviderList
-	if err := c.List(ctx, &authProviders, &kclient.ListOptions{
-		Namespace: system.DefaultNamespace,
-	}); err != nil {
-		return nil, fmt.Errorf("failed to list auth providers: %w", err)
-	}
-
-	var violations []Violation
-	for _, ap := range authProviders.Items {
-		if ap.Status.Configured {
-			missingEntitlements := p.missingEntitlements(ap.Spec.RequiredEntitlements)
-			if len(missingEntitlements) > 0 {
-				violations = append(violations, Violation{
-					Type:                 "authProvider",
-					Namespace:            ap.Namespace,
-					Name:                 ap.Name,
-					RequiredEntitlements: ap.Spec.RequiredEntitlements,
-					MissingEntitlements:  missingEntitlements,
-				})
-			}
-		}
-	}
-
-	return violations, nil
-}
-
-func (f *fake) ServeHTTP(http.ResponseWriter, *http.Request) {}
